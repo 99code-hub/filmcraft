@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::es::Splitter;
 use crate::pes;
-use crate::{ByteSource, Codec, Error, File, Format, LpcmFormat, Result, Stream, StreamId, Unit, Unwrap, read_some};
+use crate::{ByteSource, ClockRange, Codec, Error, File, Format, LpcmFormat, Result, Stream, StreamId, Unit, Unwrap, read_some};
 
 /// Sequential reader with a refillable window.
 struct Win<'a, S: ByteSource + ?Sized> {
@@ -130,9 +130,10 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
     let mut pos = 0u64;
     let mut streams: HashMap<(u8, Option<u8>), EsState> = HashMap::new();
     let mut order = Vec::new();
-    let mut psm: HashMap<u8, u8> = HashMap::new();
+    // one timestamp unwrapper for the program: its streams share one clock (as in the TS scan)
     let mut unwrap = Unwrap::default();
-    let mut scr: Option<(i64, i64)> = None;
+    let mut psm: HashMap<u8, u8> = HashMap::new();
+    let mut scr = ClockRange::default();
     let mut resyncs = 0u64;
     while pos + 4 <= len {
         let head = win.get(pos, 32)?;
@@ -175,7 +176,7 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
             } else {
                 pes::timestamp(&head[4..9]) * 300
             };
-            scr = Some(scr.map_or((v, v), |(a, b): (i64, i64)| (a.min(v), b.max(v))));
+            scr.push(v);
         } else if id == 0xBC {
             // program stream map: elementary stream id → stream_type
             let body = win.get(pos, plen)?;
@@ -225,7 +226,8 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
                     EsState { stream, split: Splitter::new(&codec) }
                 });
                 e.stream.pes_packets += 1;
-                e.split.pes_start(h.pts.map(|t| unwrap.unwrap(t)), h.dts.map(|t| unwrap.unwrap(t)));
+                let (pts, dts) = (h.pts.map(|t| unwrap.unwrap(t)), h.dts.map(|t| unwrap.unwrap(t)));
+                e.split.pes_start(pts, dts);
                 e.split.feed(pos, &payload[skip..]);
             }
         }
@@ -246,7 +248,7 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
     if out.is_empty() {
         return Err(Error::Invalid("program stream without elementary streams".into()));
     }
-    Ok(File { format: Format::Ps { mpeg1 }, streams: out, program: None, pcr_range: scr, warnings })
+    Ok(File { format: Format::Ps { mpeg1 }, streams: out, program: None, pcr_range: scr.range(), warnings })
 }
 
 /// Collect unit `u` of stream `st`, starting at the PES packet at `u.pos`.
