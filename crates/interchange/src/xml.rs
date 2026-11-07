@@ -14,6 +14,7 @@ pub(crate) fn escape(s: &str) -> String {
             '"' => o.push_str("&quot;"),
             '\'' => o.push_str("&apos;"),
             c if (c as u32) < 0x20 && !matches!(c, '\n' | '\r' | '\t') => {}
+            '\u{fffe}' | '\u{ffff}' => {}
             c => o.push(c),
         }
     }
@@ -194,6 +195,19 @@ mod tests {
         assert_eq!(num(100.0), "100");
         assert_eq!(num(-0.0), "0");
         assert_eq!(num(0.1 + 0.2).parse::<f64>().unwrap(), 0.1 + 0.2);
+    }
+
+    #[test]
+    fn drops_xml_noncharacters_so_output_parses() {
+        let mut w = XmlWriter::new(None);
+        w.open("a", &[("name", "p\u{fffe}q\u{ffff}r")]);
+        w.text("b", "x\u{fffe}y\u{ffff}z");
+        w.close();
+        let s = w.finish();
+        let d = parse(&s).expect("output must be well-formed");
+        let a = d.root_element();
+        assert_eq!(a.attribute("name"), Some("pqr"));
+        assert_eq!(child_text(a, "b"), Some("xyz"));
     }
 
     #[test]
