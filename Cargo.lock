@@ -2029,6 +2029,7 @@ dependencies = [
  "filmcraft-render",
  "filmcraft-testkit",
  "filmcraft-time",
+ "same-file",
  "serde_json",
  "tokio",
 ]
